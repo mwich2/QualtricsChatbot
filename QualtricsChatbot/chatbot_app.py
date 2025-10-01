@@ -1,9 +1,12 @@
 import streamlit as st
 import openai
-import json # Used to correctly format data sent back to Qualtrics
+import json  # Used to correctly format data sent back to Qualtrics
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
 
 # --- 1. CONFIGURATION AND SECRETS ---
-# The key is securely read from the Streamlit Secrets manager
+# OpenAI API key from Streamlit Secrets
 try:
     openai_api_key = st.secrets["openai_api_key"]
 except KeyError:
@@ -12,7 +15,7 @@ except KeyError:
 
 client = openai.OpenAI(api_key=openai_api_key)
 
-# DEFINE THE AI PERSONA: Customize this prompt!
+# Define AI persona
 SYSTEM_MESSAGE = (
     "You are a neutral research assistant. Answer user questions about the survey topic "
     "concisely (under 3 sentences) and politely. Do not ask any questions yourself."
@@ -70,8 +73,6 @@ if prompt := st.chat_input("Ask the AI a question..."):
     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
 # --- 4. DATA TRANSFER BACK (CHATBOT -> QUALTRICS) ---
-
-# Concatenate the full transcript
 transcript_lines = [
     f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}' 
     for m in st.session_state.messages 
@@ -79,19 +80,36 @@ transcript_lines = [
 ]
 full_transcript = " | ".join(transcript_lines)
 
-# Add JavaScript to post the transcript to the Qualtrics parent window
-# This script runs every time the page updates (i.e., when a new message is sent)
+# Send transcript back to Qualtrics
 if full_transcript:
-    # We send the transcript data as a JSON object
     data_to_send = {
         "type": "QualtricsDataTransfer",
         "data": full_transcript
     }
-
-    # NOTE: This is the JavaScript that sends the data.
-    # It assumes the Qualtrics survey is the parent window.
     st.components.v1.html(f"""
     <script>
     window.parent.postMessage({json.dumps(data_to_send)}, '*');
     </script>
     """, height=0, width=0)
+
+# --- 5. APPEND TRANSCRIPT TO GOOGLE SHEET ---
+if full_transcript:
+    # Google Sheets setup
+    SERVICE_ACCOUNT_FILE = "/Users/matthewwich/Documents/QualtricsChatbot/qualtrics-473801-506590ec4293.json"  # <-- Replace with your JSON key path
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+    try:
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        gs_client = gspread.authorize(creds)
+
+        SHEET_NAME = "QualtricsTranscripts"  # <-- Your Google Sheet name
+        WORKSHEET_NAME = "Sheet1"  # <-- Your worksheet/tab name
+        sheet = gs_client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
+
+        # Append transcript with timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = [timestamp, qualtrics_id, full_transcript]
+        sheet.append_row(row)
+
+    except Exception as e:
+        st.error(f"Error writing to Google Sheet: {e}")
