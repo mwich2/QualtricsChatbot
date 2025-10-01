@@ -20,7 +20,7 @@ SYSTEM_MESSAGE = (
 )
 
 st.set_page_config(layout="wide")
-st.title("Qualtrics AI Assistant")
+st.title("Housing Problem Solver Interview (Type Ready to Begin the Interview")
 
 if "messages" not in st.session_state:
     st.session_state["messages"] = [
