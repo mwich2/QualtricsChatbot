@@ -14,7 +14,7 @@ client = openai.OpenAI(api_key=openai_api_key)
 
 # DEFINE THE AI PERSONA: Customize this prompt!
 SYSTEM_MESSAGE = (
-    "You are a neutral research assistant. Answer user questions about the survey topic "
+    "You are a neutral research assistant. Answer user questions about the survey topic. Act like you are interviewing a housing problem solver, someone who helps people on the brink of homelessness"
     "concisely (under 3 sentences) and politely. Do not ask any questions yourself."
 )
 
