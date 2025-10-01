@@ -43,9 +43,12 @@ except Exception as e:
 # --- 2. SYSTEM PROMPT (AI Persona) ---
 SYSTEM_MESSAGE = (
     "In the interview, please explore how the respondent has helped people on the brink of homelessness. "
-    "The respondent is a 'housing problem solver' from Santa Clara County. Ask one question at a time and do not number your questions. "
-    "Begin the interview with: 'Hello! I'm glad to have the opportunity to speak about your experience as a housing problem solver today. "
-    "Could you share the tools you find most useful in preventing homelessness? Please do not hesitate to ask if anything is unclear.'"
+    "The respondent is a 'housing problem solver' from Santa Clara County. Ask one question at a time and do not number your questions."
+)
+
+FIRST_QUESTION = (
+    "Hello! I'm glad to have the opportunity to speak about your experience as a housing problem solver today. "
+    "Could you share the tools you find most useful in preventing homelessness? Please do not hesitate to ask if anything is unclear."
 )
 
 # --- 3. STREAMLIT PAGE SETUP ---
@@ -61,24 +64,26 @@ if "participant_id" not in st.session_state:
 
 st.caption(f"Participant ID: {st.session_state['participant_id']}")
 
-# --- 5. START BUTTON ---
 if "started" not in st.session_state:
     st.session_state["started"] = False
 
+# --- 5. START BUTTON ---
 if not st.session_state["started"]:
     if st.button("Start Interview"):
         st.session_state["started"] = True
+        # Automatically add first AI question
+        st.session_state.messages.append({"role": "assistant", "content": FIRST_QUESTION})
     else:
-        st.stop()  # Do not show chat until interview is started
+        st.stop()  # Stop until interview starts
 
-# --- 6. CHAT INTERFACE ---
-for message in st.session_state.messages:
-    if message["role"] != "system":
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# --- 6. DISPLAY CHAT ---
+for msg in st.session_state.messages:
+    if msg["role"] != "system":
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-prompt = st.chat_input("Ask the AI a question...")
-if prompt:
+# --- 7. USER INPUT AND AI RESPONSE ---
+if prompt := st.chat_input("Type your response here..."):
     # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -106,10 +111,10 @@ if prompt:
             full_response = f"Error: Could not connect to AI. ({e})"
             message_placeholder.error(full_response)
 
-    # Add AI response to session
+    # Append AI response to session
     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-    # --- 7. AUTOMATIC STORAGE IN GOOGLE SHEETS ---
+    # --- 8. AUTOMATIC STORAGE IN GOOGLE SHEETS ---
     try:
         transcript_lines = [
             f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}'
@@ -121,7 +126,7 @@ if prompt:
     except Exception as e:
         st.error(f"Failed to save interview automatically: {e}")
 
-# --- 8. OPTIONAL: SEND TO QUALTRICS ---
+# --- 9. OPTIONAL: SEND TO QUALTRICS ---
 if st.session_state["messages"]:
     transcript_lines = [
         f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}'
