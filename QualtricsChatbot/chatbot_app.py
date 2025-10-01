@@ -1,9 +1,14 @@
 import streamlit as st
 import openai
-import json # Used to correctly format data sent back to Qualtrics
+import json
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
+import uuid  # For generating unique participant IDs
 
 # --- 1. CONFIGURATION AND SECRETS ---
-# The key is securely read from the Streamlit Secrets manager
+
+# OpenAI API key from Streamlit Secrets
 try:
     openai_api_key = st.secrets["openai_api_key"]
 except KeyError:
@@ -12,35 +17,61 @@ except KeyError:
 
 client = openai.OpenAI(api_key=openai_api_key)
 
-# DEFINE THE AI PERSONA: Customize this prompt!
-SYSTEM_MESSAGE = (
-    "In the interview, please explore how the respondent has helped people on the brink of homelessness. The respondent is a 'housing problem solver' from Santa Clara County. The housing problem solver is essentially a counselor that attempts to find the person they are seeking to help immediate, creative housing solutions to their housing crisis -- whether that means finding temporary housing options with family and friends or identifying more permanent solutions. In the case that receiving a moderate amount of money will prevent an individual from entering a shelter, immediate cash assistance is provided to participants. The interview consists of successive parts that are outlined below. Ask one question at a time and do not number your questions. Begin the interview with: 'Hello! I'm glad to have the opportunity to speak about your experience as a housing problem solver today. Could you share the tools you find most useful in preventing homelessness? Please do not hesitate to ask if anything is unclear.'"
+# Google Sheets setup
+try:
+    gsheet_creds = Credentials.from_service_account_info(
+        st.secrets["gsheet_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    gc = gspread.authorize(gsheet_creds)
+    sheet = gc.open("HousingInterviews").sheet1
+except KeyError:
+    st.error("Google Sheets service account info not found in Streamlit Secrets.")
+    st.stop()
 
-    "Guide the interview in a non-directive and non-leading way, letting the respondent bring up relevant topics. Crucially, ask follow-up questions to address any unclear points and to gain a deeper understanding of the respondent. Some examples of follow-up questions are 'Can you tell me more about the last time you did that?', 'What has that been like for you?', 'Why is this important to you?', or 'Can you offer an example?', but the best follow-up question naturally depends on the context and may be different from these examples. Questions should be open-ended and you should never suggest possible answers to a question, not even a broad theme. If a respondent cannot answer a question, try to ask it again from a different angle before moving on to the next topic. Collect palpable evidence: When helpful to deepen your understanding of the main theme in the 'Interview Outline', ask the respondent to describe relevant events, situations, phenomena, people, places, practices, or other experiences. Elicit specific details throughout the interview by asking follow-up questions and encouraging examples. Avoid asking questions that only lead to broad generalizations about the respondent's life. Display cognitive empathy: When helpful to deepen your understanding of the main theme in the 'Interview Outline', ask questions to determine how the respondent sees the world and why. Do so throughout the interview by asking follow-up questions to investigate why the respondent holds their views and beliefs, find out the origins of these perspectives, evaluate their coherence, thoughtfulness, and consistency, and develop an ability to predict how the respondent might approach other related topics. Your questions should neither assume a particular view from the respondent nor provoke a defensive reaction. Convey to the respondent that different views are welcome. Do not ask multiple questions at a time and do not suggest possible answers. Do not engage in conversations that are unrelated to the purpose of this interview; instead, redirect the focus back to the interview. Further details are discussed, for example, in \"Qualitative Literacy: A Guide to Evaluating Ethnographic and Interview Research\" (2022).\""
+# --- 2. SYSTEM PROMPT (AI Persona) ---
+SYSTEM_MESSAGE = (
+    "In the interview, please explore how the respondent has helped people on the brink of homelessness. "
+    "The respondent is a 'housing problem solver' from Santa Clara County. The interview consists of successive parts "
+    "that are outlined below. Ask one question at a time and do not number your questions. Begin the interview with: "
+    "'Hello! I'm glad to have the opportunity to speak about your experience as a housing problem solver today. "
+    "Could you share the tools you find most useful in preventing homelessness? Please do not hesitate to ask if anything is unclear.'"
+    "Guide the interview in a non-directive and non-leading way, asking follow-ups and eliciting specific details. "
 )
 
+# --- 3. PAGE SETUP ---
 st.set_page_config(layout="wide")
-st.title("Housing Problem Solver Interview (Type 'Ready' to Begin the Interview")
+st.title("Housing Problem Solver Interview")
 
+# --- 4. SESSION STATE INITIALIZATION ---
 if "messages" not in st.session_state:
-    st.session_state["messages"] = [
-        {"role": "system", "content": SYSTEM_MESSAGE}
-    ]
+    st.session_state["messages"] = [{"role": "system", "content": SYSTEM_MESSAGE}]
 
-# --- 2. RECEIVE DATA (QUALTRICS -> CHATBOT) ---
-qualtrics_id = st.query_params.get("qualtrics_id", "NOT_FOUND")
-if qualtrics_id != "NOT_FOUND":
-    st.caption(f"Survey ID: {qualtrics_id} (Data linked)")
+if "participant_id" not in st.session_state:
+    # Generate a unique ID for this participant
+    st.session_state["participant_id"] = str(uuid.uuid4())
 
-# --- 3. CHAT INTERFACE AND LOGIC ---
+# Display participant ID (optional, for your reference)
+st.caption(f"Participant ID: {st.session_state['participant_id']}")
+
+# --- 5. START BUTTON ---
+if "started" not in st.session_state:
+    st.session_state["started"] = False
+
+if not st.session_state["started"]:
+    if st.button("Start Interview"):
+        st.session_state["started"] = True
+    else:
+        st.stop()  # Do not show chat until interview is started
+
+# --- 6. CHAT INTERFACE ---
 for message in st.session_state.messages:
     if message["role"] != "system":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-if prompt := st.chat_input("Ask the AI a question..."):
-
-    # Display user message and add to history
+prompt = st.chat_input("Ask the AI a question...")
+if prompt:
+    # Add user message to session
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -63,36 +94,39 @@ if prompt := st.chat_input("Ask the AI a question..."):
                     message_placeholder.markdown(full_response + "▌")
 
             message_placeholder.markdown(full_response)
-
         except Exception as e:
             full_response = f"Error: Could not connect to AI. ({e})"
             message_placeholder.error(full_response)
 
+    # Append AI response to session
     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-# --- 4. DATA TRANSFER BACK (CHATBOT -> QUALTRICS) ---
+    # --- 7. AUTOMATIC STORAGE AFTER EACH AI RESPONSE ---
+    try:
+        # Concatenate the transcript so far
+        transcript_lines = [
+            f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}'
+            for m in st.session_state.messages
+            if m["role"] != "system"
+        ]
+        full_transcript = " | ".join(transcript_lines)
 
-# Concatenate the full transcript
-transcript_lines = [
-    f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}' 
-    for m in st.session_state.messages 
-    if m["role"] != "system"
-]
-full_transcript = " | ".join(transcript_lines)
+        # Append to Google Sheet
+        sheet.append_row([st.session_state["participant_id"], datetime.now().isoformat(), full_transcript])
+    except Exception as e:
+        st.error(f"Failed to save interview automatically: {e}")
 
-# Add JavaScript to post the transcript to the Qualtrics parent window
-# This script runs every time the page updates (i.e., when a new message is sent)
-if full_transcript:
-    # We send the transcript data as a JSON object
-    data_to_send = {
-        "type": "QualtricsDataTransfer",
-        "data": full_transcript
-    }
-
-    # NOTE: This is the JavaScript that sends the data.
-    # It assumes the Qualtrics survey is the parent window.
+# --- 8. OPTIONAL: Send to Qualtrics if embedding ---
+if st.session_state["messages"]:
+    transcript_lines = [
+        f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}'
+        for m in st.session_state.messages
+        if m["role"] != "system"
+    ]
+    full_transcript = " | ".join(transcript_lines)
+    data_to_send = {"type": "QualtricsDataTransfer", "data": full_transcript}
     st.components.v1.html(f"""
-    <script>
-    window.parent.postMessage({json.dumps(data_to_send)}, '*');
-    </script>
+        <script>
+        window.parent.postMessage({json.dumps(data_to_send)}, '*');
+        </script>
     """, height=0, width=0)
