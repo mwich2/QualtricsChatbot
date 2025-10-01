@@ -4,11 +4,11 @@ import json
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import uuid  # For generating unique participant IDs
+import uuid  # For unique participant IDs
 
 # --- 1. CONFIGURATION AND SECRETS ---
 
-# OpenAI API key from Streamlit Secrets
+# OpenAI API key
 try:
     openai_api_key = st.secrets["openai_api_key"]
 except KeyError:
@@ -17,28 +17,38 @@ except KeyError:
 
 client = openai.OpenAI(api_key=openai_api_key)
 
-# Google Sheets setup
+# Google Sheets authentication using service account
 try:
     gsheet_creds = Credentials.from_service_account_info(
-        st.secrets["gsheet_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"]
+        st.secrets["gcp_service_account"],
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     gc = gspread.authorize(gsheet_creds)
-    sheet = gc.open("HousingInterviews").sheet1
 except KeyError:
     st.error("Google Sheets service account info not found in Streamlit Secrets.")
+    st.stop()
+except Exception as e:
+    st.error(f"Failed to authorize Google Sheets: {e}")
+    st.stop()
+
+# Google Sheet ID
+SHEET_ID = "1nmrZ0iJ_LCwE8KYFI1COe0XzZVHs0X7tqUm5jizIHDM"
+
+try:
+    sheet = gc.open_by_key(SHEET_ID).sheet1
+except Exception as e:
+    st.error(f"Failed to open Google Sheet by key: {e}")
     st.stop()
 
 # --- 2. SYSTEM PROMPT (AI Persona) ---
 SYSTEM_MESSAGE = (
     "In the interview, please explore how the respondent has helped people on the brink of homelessness. "
-    "The respondent is a 'housing problem solver' from Santa Clara County. The interview consists of successive parts "
-    "that are outlined below. Ask one question at a time and do not number your questions. Begin the interview with: "
-    "'Hello! I'm glad to have the opportunity to speak about your experience as a housing problem solver today. "
+    "The respondent is a 'housing problem solver' from Santa Clara County. Ask one question at a time and do not number your questions. "
+    "Begin the interview with: 'Hello! I'm glad to have the opportunity to speak about your experience as a housing problem solver today. "
     "Could you share the tools you find most useful in preventing homelessness? Please do not hesitate to ask if anything is unclear.'"
-    "Guide the interview in a non-directive and non-leading way, asking follow-ups and eliciting specific details. "
 )
 
-# --- 3. PAGE SETUP ---
+# --- 3. STREAMLIT PAGE SETUP ---
 st.set_page_config(layout="wide")
 st.title("Housing Problem Solver Interview")
 
@@ -47,10 +57,8 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = [{"role": "system", "content": SYSTEM_MESSAGE}]
 
 if "participant_id" not in st.session_state:
-    # Generate a unique ID for this participant
-    st.session_state["participant_id"] = str(uuid.uuid4())
+    st.session_state["participant_id"] = str(uuid.uuid4())  # Unique ID per participant
 
-# Display participant ID (optional, for your reference)
 st.caption(f"Participant ID: {st.session_state['participant_id']}")
 
 # --- 5. START BUTTON ---
@@ -71,12 +79,12 @@ for message in st.session_state.messages:
 
 prompt = st.chat_input("Ask the AI a question...")
 if prompt:
-    # Add user message to session
+    # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Get AI response
+    # AI response
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
@@ -98,25 +106,22 @@ if prompt:
             full_response = f"Error: Could not connect to AI. ({e})"
             message_placeholder.error(full_response)
 
-    # Append AI response to session
+    # Add AI response to session
     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-    # --- 7. AUTOMATIC STORAGE AFTER EACH AI RESPONSE ---
+    # --- 7. AUTOMATIC STORAGE IN GOOGLE SHEETS ---
     try:
-        # Concatenate the transcript so far
         transcript_lines = [
             f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}'
             for m in st.session_state.messages
             if m["role"] != "system"
         ]
         full_transcript = " | ".join(transcript_lines)
-
-        # Append to Google Sheet
         sheet.append_row([st.session_state["participant_id"], datetime.now().isoformat(), full_transcript])
     except Exception as e:
         st.error(f"Failed to save interview automatically: {e}")
 
-# --- 8. OPTIONAL: Send to Qualtrics if embedding ---
+# --- 8. OPTIONAL: SEND TO QUALTRICS ---
 if st.session_state["messages"]:
     transcript_lines = [
         f'{m["role"].capitalize()}: {m["content"].replace("\\n", " ")}'
