@@ -73,6 +73,16 @@ if not st.session_state["started"]:
         st.session_state["started"] = True
         # Automatically add first AI question
         st.session_state.messages.append({"role": "assistant", "content": FIRST_QUESTION})
+
+        # --- Save first AI question to Google Sheets ---
+        try:
+            sheet.append_row([
+                st.session_state["participant_id"], 
+                datetime.now().isoformat(), 
+                FIRST_QUESTION
+            ])
+        except Exception as e:
+            st.error(f"Failed to save first AI question: {e}")
     else:
         st.stop()  # Stop until interview starts
 
